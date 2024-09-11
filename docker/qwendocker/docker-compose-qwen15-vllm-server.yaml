@@ -1,0 +1,21 @@
+services:
+  qwen15-vllm-server:
+    image: qwenllm/qwen:1.5-cu121
+    container_name: qwen15-vllm-server
+    command: tail -f /dev/null
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - /etc/localtime:/etc/localtime
+      - /data/data_science_department/model:/usr/src/app
+    working_dir: /usr/src/app
+    ports:
+      - "8947:8947"
+      - "8948:8948"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+    restart: unless-stopped
