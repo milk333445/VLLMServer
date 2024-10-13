@@ -9,7 +9,7 @@ import yaml
 import ssl
 import yaml
 from pydantic import BaseModel
-from typing import List, Union
+from typing import List, Union, Optional
 import numpy as np
 import asyncio
 from enum import Enum
@@ -48,8 +48,9 @@ logger = init_logger(__name__)
 
 class EmbeddingRequest(BaseModel):
     input: Union[str, List[str]] # input text or list of input texts
-    model: str # model name
-    encoding_format: str = "float"
+    model: Optional[str] = None # model name
+    encoding_format: Optional[str] = "float" # encoding format, default is float
+    query: Optional[str] = None # query string
 
 
 @asynccontextmanager
@@ -223,9 +224,13 @@ async def create_completion(request: CompletionRequest, raw_request: Request):
 async def create_embeddings(request: EmbeddingRequest):
     model_name = request.model
     
-    if model_name not in builder.embedding_model_configs:
-        raise HTTPException(status_code=400, detail=f"Model {model_name} not found")
-    
+    if request.query is not None:
+        if model_name not in builder.reranking_model_configs:
+            raise HTTPException(status_code=400, detail=f"Re-ranking model {model_name} not found")
+    else:
+        if model_name not in builder.embedding_model_configs:
+            raise HTTPException(status_code=400, detail=f"Embedding model {model_name} not found")
+        
     if isinstance(request.input, str):
         inputs = [request.input]
     else:  
@@ -233,30 +238,56 @@ async def create_embeddings(request: EmbeddingRequest):
         
     try:
         model = getattr(builder, model_name)
+        response_data = []
+        
         loop = asyncio.get_running_loop()
         ctx = contextvars.copy_context()
-        func_call = functools.partial(ctx.run, model.get_embeddings, inputs)
-        embeddings = await loop.run_in_executor(None, func_call)
         
-        response_data = []
-        for idx, embedding in enumerate(embeddings):
-            response_data.append(
-                {
-                    "object":"embedding",
-                    "embedding":embedding.tolist(),
-                    "index":idx
+        if request.query is not None:
+            func_call = functools.partial(ctx.run, model.rerank, request.query, inputs) # 等於 model.rerank(request.query, inputs)
+            scores = await loop.run_in_executor(None, func_call)
+
+            for idx, score in enumerate(scores):
+                response_data.append(
+                    {
+                        "object":"reranking",
+                        "embedding":float(score),
+                        "index":idx
+                    }
+                )
+                
+            return {
+                "object":"list",
+                "data":response_data,
+                "model":model_name,
+                "usage": {
+                    "prompt_tokens": len(request.query.split()),
+                    "total_tokens": sum(len(text.split()) for text in inputs)
                 }
-            )
-        
-        return {
-            "object":"list",
-            "data":response_data,
-            "model":model_name,
-            "usage": {
-                "prompt_tokens": sum(len(text.split()) for text in inputs),
-                "total_tokens": sum(len(text.split()) for text in inputs)
             }
-        }
+        
+        else:
+            func_call = functools.partial(ctx.run, model.get_embeddings, inputs)
+            embeddings = await loop.run_in_executor(None, func_call)
+        
+            for idx, embedding in enumerate(embeddings):
+                response_data.append(
+                    {
+                        "object":"embedding",
+                        "embedding":embedding.tolist(),
+                        "index":idx
+                    }
+                )
+            
+            return {
+                "object":"list",
+                "data":response_data,
+                "model":model_name,
+                "usage": {
+                    "prompt_tokens": sum(len(text.split()) for text in inputs),
+                    "total_tokens": sum(len(text.split()) for text in inputs)
+                }
+            }
     except Exception as e:
         logger.error(f"Error creating embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating embeddings: {str(e)}")
@@ -351,6 +382,14 @@ if __name__ == "__main__":
                 tokenizer_path: "./embedding_engine/model/embedding_model/m3e-base-tokenizer"
                 max_length: 512
                 use_gpu: True
+                use_float16: True
+        reranking_models:
+            bge-reranker-large:
+                model_name: 'BAAI/bge-reranker-large'
+                model_path: "./embedding_engine/model/reranking_model/bge-reranker-large-model"
+                tokenizer_path: "./embedding_engine/model/reranking_model/bge-reranker-large-tokenizer"  
+                max_length: 512
+                use_gpu: True  
                 use_float16: True
     """
     

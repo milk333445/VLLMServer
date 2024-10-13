@@ -95,3 +95,5 @@ class EmbedRerankBuilder:
             )
             setattr(self, key, model)
             self.model_name.append(key)
+
+    
