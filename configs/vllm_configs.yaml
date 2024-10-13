@@ -30,3 +30,12 @@ embedding_models:
     max_length: 512
     use_gpu: True
     use_float16: True
+  
+reranking_models:
+  bge-reranker-large:
+    model_name: 'BAAI/bge-reranker-large'
+    model_path: "./embedding_engine/model/reranking_model/bge-reranker-large-model"
+    tokenizer_path: "./embedding_engine/model/reranking_model/bge-reranker-large-tokenizer"  
+    max_length: 512
+    use_gpu: True  
+    use_float16: True

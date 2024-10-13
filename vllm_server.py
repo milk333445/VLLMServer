@@ -9,7 +9,7 @@ import json
 import ssl
 import yaml
 from pydantic import BaseModel
-from typing import List, Union
+from typing import List, Union, Optional
 import numpy as np
 import asyncio
 
@@ -46,8 +46,9 @@ logger = init_logger(__name__)
 
 class EmbeddingRequest(BaseModel):
     input: Union[str, List[str]] # input text or list of input texts
-    model: str # model name
-    encoding_format: str = "float"
+    model: Optional[str] = None # model name
+    encoding_format: Optional[str] = "float" # encoding format, default is float
+    query: Optional[str] = None # query string
 
 
 class LoRAParserAction(argparse.Action):
@@ -268,14 +269,17 @@ async def create_completion(request: CompletionRequest, raw_request: Request):
     else:
         return JSONResponse(content=generator.model_dump())
 
-
 @app.post("/v1/embeddings")
 async def create_embeddings(request: EmbeddingRequest):
     model_name = request.model
     
-    if model_name not in builder.embedding_model_configs:
-        raise HTTPException(status_code=400, detail=f"Model {model_name} not found")
-    
+    if request.query is not None:
+        if model_name not in builder.reranking_model_configs:
+            raise HTTPException(status_code=400, detail=f"Re-ranking model {model_name} not found")
+    else:
+        if model_name not in builder.embedding_model_configs:
+            raise HTTPException(status_code=400, detail=f"Embedding model {model_name} not found")
+        
     if isinstance(request.input, str):
         inputs = [request.input]
     else:  
@@ -283,33 +287,58 @@ async def create_embeddings(request: EmbeddingRequest):
         
     try:
         model = getattr(builder, model_name)
-        embeddings = await asyncio.to_thread(model.get_embeddings, inputs)
-        
         response_data = []
-        for idx, embedding in enumerate(embeddings):
-            response_data.append(
-                {
-                    "object":"embedding",
-                    "embedding":embedding.tolist(),
-                    "index":idx
-                }
-            )
         
-        return {
-            "object":"list",
-            "data":response_data,
-            "model":model_name,
-            "usage": {
-                "prompt_tokens": sum(len(text.split()) for text in inputs),
-                "total_tokens": sum(len(text.split()) for text in inputs)
+        if request.query is not None:
+            # Reranking
+            scores = await asyncio.to_thread(model.rerank, request.query, inputs)
+            
+            for idx, score in enumerate(scores):
+                response_data.append(
+                    {
+                        "object":"reranking",
+                        "embedding":float(score),
+                        "index":idx
+                    }
+                )
+                
+            return {
+                "object":"list",
+                "data":response_data,
+                "model":model_name,
+                "usage": {
+                    "prompt_tokens": len(request.query.split()),
+                    "total_tokens": sum(len(text.split()) for text in inputs)
+                }
             }
-        }
+        # Embedding
+        else:
+            embeddings = await asyncio.to_thread(model.get_embeddings, inputs)
+        
+            for idx, embedding in enumerate(embeddings):
+                response_data.append(
+                    {
+                        "object":"embedding",
+                        "embedding":embedding.tolist(),
+                        "index":idx
+                    }
+                )
+            
+            return {
+                "object":"list",
+                "data":response_data,
+                "model":model_name,
+                "usage": {
+                    "prompt_tokens": sum(len(text.split()) for text in inputs),
+                    "total_tokens": sum(len(text.split()) for text in inputs)
+                }
+            }
     except Exception as e:
         logger.error(f"Error creating embeddings: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating embeddings: {str(e)}")
     
     
-def load_config(config_path):
+def load_config(config_path="./configs/vllm_standard_config.yaml"):
     if os.path.exists(config_path):
         with open(config_path, 'r') as file:
             config = yaml.safe_load(file)
@@ -390,7 +419,14 @@ if __name__ == "__main__":
             max_length: 512
             use_gpu: True
             use_float16: True
-
+    reranking_models:
+        bge-reranker-large:
+            model_name: 'BAAI/bge-reranker-large'
+            model_path: "./embedding_engine/model/reranking_model/bge-reranker-large-model"
+            tokenizer_path: "./embedding_engine/model/reranking_model/bge-reranker-large-tokenizer"  
+            max_length: 512
+            use_gpu: True  
+            use_float16: True
     """
     args = parse_args()
     if args.config:
@@ -443,3 +479,5 @@ if __name__ == "__main__":
                 ssl_certfile=args.ssl_certfile,
                 ssl_ca_certs=args.ssl_ca_certs,
                 ssl_cert_reqs=args.ssl_cert_reqs)
+    
+    

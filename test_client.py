@@ -24,3 +24,23 @@ response = client.embeddings.create(
 )
 
 print(response.data[0].embedding)
+
+# test reranking model
+documents = [
+            "Machine learning is taught best through projects.",
+            "Theory is essential for understanding machine learning.",
+            "Practical tutorials are the best way to learn machine learning.",
+            "Machine learning is taught best through projects.",
+            "Theory is essential for understanding machine learning.",
+            "Practical tutorials are the best way to learn machine learning.",
+            "Machine learning is taught best through projects.",
+            "Theory is essential for understanding machine learning.",
+            "Practical tutorials are the best way to learn machine learning."
+        ]
+response = client.embeddings.create(
+    model = "bge-reranker-large",
+    input = documents,
+    extra_body={"query": "Theory is essential for understanding machine learning."},
+)
+
+print(response.data[0].embedding)

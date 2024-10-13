@@ -1,7 +1,7 @@
 import torch
+
 from transformers import AutoModelForSequenceClassification, AutoModel
 
-# from qdrant_db.baseinferencer import BaseInferencer
 from embedding_engine.baseinferencer import BaseInferencer
 
 
@@ -31,12 +31,9 @@ class Reranker(BaseInferencer):
                 all_scores.extend(scores)
                 all_documents.extend(batch_docs)
                 
-                del inputs, scores, outputs
+                del inputs, scores
                 torch.cuda.empty_cache()
-                
-        sorted_documents = [doc for doc, _ in sorted(zip(all_documents, all_scores), key=lambda x: x[1], reverse=True)]
-        sorted_scores = [score for score in sorted(all_scores, reverse=True)]
-        return sorted_documents, sorted_scores
+        return all_scores
     
 
 class Embedder(BaseInferencer):
